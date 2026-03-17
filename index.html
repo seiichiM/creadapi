@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📋 高精度読み上げツール (Google Cloud TTS対応)</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f0f4f8; color: #333; }
+        .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); width: 90%; max-width: 500px; text-align: center; }
+        h2 { margin: 0 0 20px 0; color: #1a73e8; font-size: 22px; }
+        textarea { width: 100%; height: 120px; margin-bottom: 20px; border: 1px solid #ddd; border-radius: 10px; padding: 12px; font-size: 14px; box-sizing: border-box; resize: none; background: #fafafa; }
+        
+        .control-group { text-align: left; margin-bottom: 20px; background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
+        .control-item { margin-bottom: 15px; }
+        label { display: block; font-size: 12px; font-weight: bold; color: #5f6368; margin-bottom: 8px; }
+        
+        input[type="text"], select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #dadce0; box-sizing: border-box; }
+        input[type="range"] { width: 100%; }
+        .range-value { float: right; color: #1a73e8; font-weight: bold; }
+
+        .btn-group { display: flex; gap: 10px; }
+        .btn { flex: 1; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 30px; cursor: pointer; border: none; transition: 0.2s; }
+        .btn-primary { background: #1a73e8; color: white; }
+        .btn-primary:hover { background: #1765cf; }
+        .btn-secondary { background: #e8f0fe; color: #1a73e8; }
+        
+        .status { margin-top: 20px; font-size: 13px; color: #70757a; font-style: italic; }
+        .api-note { font-size: 11px; color: #ea4335; margin-top: 10px; text-align: left; }
+    </style>
+
+    <!-- PWA Settings -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('service-worker.js');
+        }
+    </script>
+</head>
+<body>
+
+<div class="card">
+    <h2>🎙️ Premium TTS Reader</h2>
+    
+    <textarea id="textInput" placeholder="読み上げたいテキストを入力..."></textarea>
+    
+    <div class="control-group">
+        <div class="control-item">
+            <label>🔑 Google Cloud API Key:</label>
+            <input type="text" id="apiKey" placeholder="AIZA..." value="">
+            <div class="api-note">※APIキーが必要です。Google Cloud Consoleで作成してください。</div>
+        </div>
+
+        <div class="control-item">
+            <label>🗣️ 音声モデル (Neural2推奨):</label>
+            <select id="voiceSelect">
+                <option value="ja-JP-Neural2-B">ja-JP-Neural2-B (女性・高品質)</option>
+                <option value="ja-JP-Neural2-C">ja-JP-Neural2-C (男性・高品質)</option>
+                <option value="ja-JP-Standard-A">ja-JP-Standard-A (女性・標準)</option>
+                <option value="ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・Wavenet)</option>
+            </select>
+        </div>
+        
+        <div class="control-item">
+            <label>⚡ スピード: <span id="rateValue" class="range-value">1.0</span></label>
+            <input type="range" id="rateRange" min="0.25" max="4.0" step="0.25" value="1.0">
+        </div>
+    </div>
+
+    <div class="btn-group">
+        <button class="btn btn-primary" onclick="speakCloudTTS()">▶ クラウドで読み上げ</button>
+        <button class="btn btn-secondary" onclick="stopAudio()">⏹ 停止</button>
+    </div>
+    
+    <div id="status" class="status">Ready</div>
+    <audio id="audioPlayer" style="display:none"></audio>
+</div>
+
+<script>
+    const textInput = document.getElementById('textInput');
+    const apiKeyInput = document.getElementById('apiKey');
+    const voiceSelect = document.getElementById('voiceSelect');
+    const rateRange = document.getElementById('rateRange');
+    const rateValue = document.getElementById('rateValue');
+    const statusEl = document.getElementById('status');
+    const audioPlayer = document.getElementById('audioPlayer');
+
+    rateRange.oninput = () => { rateValue.textContent = rateRange.value; };
+
+    // APIキーをローカルストレージに保存/読込
+    if (localStorage.getItem('gcloud_tts_key')) {
+        apiKeyInput.value = localStorage.getItem('gcloud_tts_key');
+    }
+
+    async function speakCloudTTS() {
+        const text = textInput.value.trim() || "読み上げるテキストがありません。";
+        const apiKey = apiKeyInput.value.trim();
+        
+        if (!apiKey) {
+            alert("Google Cloud API Keyを入力してください。");
+            return;
+        }
+        
+        localStorage.setItem('gcloud_tts_key', apiKey);
+        statusEl.textContent = "🔊 音声を生成中...";
+
+        const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
+        const data = {
+            input: { text: text },
+            voice: { languageCode: 'ja-JP', name: voiceSelect.value },
+            audioConfig: { audioEncoding: 'MP3', speakingRate: parseFloat(rateRange.value) }
+        };
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                body: JSON.stringify(data)
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error.message || "APIエラーが発生しました。");
+            }
+
+            const result = await response.json();
+            const audioBlob = b64toBlob(result.audioContent, 'audio/mpeg');
+            const audioUrl = URL.createObjectURL(audioBlob);
+
+            audioPlayer.src = audioUrl;
+            audioPlayer.play();
+            statusEl.textContent = "✅ 再生中...";
+            
+            audioPlayer.onended = () => { statusEl.textContent = "完了"; };
+        } catch (err) {
+            console.error(err);
+            statusEl.textContent = "⚠️ エラー: " + err.message;
+        }
+    }
+
+    function b64toBlob(b64Data, contentType) {
+        const byteCharacters = atob(b64Data);
+        const byteArrays = [];
+        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+            const slice = byteCharacters.slice(offset, offset + 512);
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {
+                byteNumbers[i] = slice.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+        }
+        return new Blob(byteArrays, {type: contentType});
+    }
+
+    function stopAudio() {
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+        statusEl.textContent = "停止しました";
+    }
+</script>
+
+</body>
+</html>
